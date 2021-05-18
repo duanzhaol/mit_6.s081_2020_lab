@@ -34,14 +34,14 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // p->kstack = va;
   }
-  kvminithart();
+  //kvminithart();
 }
 
 // Must be called with interrupts disabled,
@@ -113,6 +113,23 @@ found:
     return 0;
   }
 
+  // (+) A kernel page table
+  if((p->kPageTable = kvmmake()) == 0){
+  	freeproc(p);
+	  release(&p->lock);
+	  return 0;
+  }
+// (+) Allocate a page for the process's kernel stack.
+  // Map it high in memory, followed by an invalid
+  // guard page.
+  char *pa = kalloc();
+  if(pa == 0)
+	panic("kalloc");
+  uint64 va = KSTACK((int)(p - proc));
+  // uint64 va = KSTACK(0);
+  kvmmap(p->kPageTable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -139,6 +156,17 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+    // (+)
+  if(p->kstack)
+  	uvmunmap(p->kPageTable, p->kstack, 1, 1);
+  p->kstack = 0;
+  if(p->kPageTable)
+  	kvmfree(p->kPageTable);
+  p->kPageTable = 0;
+  // (+)
+
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -151,6 +179,8 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->state = UNUSED;
 }
+
+
 
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
@@ -473,13 +503,21 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        w_satp(MAKE_SATP(p->kPageTable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
 
+		   // use kernel_pagetable when no process is running.
+		    kvminithart();  // (+)
+
         found = 1;
+
       }
       release(&p->lock);
     }
